@@ -32,7 +32,7 @@
 // 3 cost/safety refusal (e.g. promote without --operator chris).
 
 import { writeFile, mkdir, readFile, stat, readdir, rename, rm } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "./io-utils.mjs";
 
@@ -41,6 +41,45 @@ const SKILLS_ROOT = join(__dirname, "..", "skills");
 const HERMES_DIR = join(SKILLS_ROOT, "hermes");
 const PENDING_DIR = join(__dirname, "..", "_pending");
 const DEFAULT_REPO = "NousResearch/hermes-agent";
+
+const ALLOWED_FETCH_HOSTS = new Set([
+  "raw.githubusercontent.com",
+  "github.com",
+  "api.github.com",
+  "objects.githubusercontent.com",
+  "codeload.github.com",
+]);
+
+// SSRF guard: only ever fetch https from a small GitHub allowlist. Blocks cloud-metadata, loopback,
+// and private targets any attacker-supplied URL or frontmatter could point at.
+function assertSafeUrl(url) {
+  let u;
+  try { u = new URL(url); } catch { throw new Error(`refusing malformed URL: ${url}`); }
+  if (u.protocol !== "https:") throw new Error(`refusing non-https URL: ${url}`);
+  if (!ALLOWED_FETCH_HOSTS.has(u.hostname.toLowerCase())) {
+    throw new Error(`refusing fetch to non-allowlisted host: ${u.hostname}`);
+  }
+  return u.href;
+}
+
+// Skill names become filesystem paths; constrain to a safe slug so attacker-controlled frontmatter
+// name cannot traverse out of the managed dir (write-to-RCE guard).
+function safeSkillName(name) {
+  if (typeof name !== "string" || !/^[A-Za-z0-9_-]+$/.test(name)) {
+    throw new Error(`unsafe skill name (letters, digits, _ and - only): ${JSON.stringify(name)}`);
+  }
+  return name;
+}
+
+// Case-insensitive containment (Windows FS): resolved candidate must sit inside root.
+function assertWithin(root, candidate) {
+  const r = resolve(root).toLowerCase();
+  const c = resolve(candidate).toLowerCase();
+  if (c !== r && !c.startsWith(r + sep)) {
+    throw new Error(`path escapes managed root: ${candidate}`);
+  }
+  return resolve(candidate);
+}
 
 function parseArgs(argv) {
   const out = { positional: [] };
@@ -69,7 +108,7 @@ async function ghApi(path) {
 }
 
 async function fetchText(url) {
-  const res = await fetch(url);
+  const res = await fetch(assertSafeUrl(url));
   if (!res.ok) throw new Error(`fetch ${url}: ${res.status}`);
   return await res.text();
 }
@@ -180,7 +219,8 @@ async function runSingle(target, { dryRun, force }) {
   const flat = flatten(fm, source);
   const out = `${emitFrontmatter(flat)}\n\n${body.trimStart()}`;
 
-  const destDir = join(HERMES_DIR, flat.name);
+  const safeName = safeSkillName(flat.name);
+  const destDir = assertWithin(HERMES_DIR, join(HERMES_DIR, safeName));
   const destFile = join(destDir, "SKILL.md");
 
   if (!force && (await exists(destFile))) {
@@ -196,7 +236,7 @@ async function runSingle(target, { dryRun, force }) {
   }
   await mkdir(destDir, { recursive: true });
   await writeFile(destFile, out, "utf8");
-  console.log(`imported: hermes/${flat.name} from ${source}`);
+  console.log(`imported: hermes/${safeName} from ${source}`);
 }
 
 // ---------- Bulk import ----------
@@ -256,8 +296,10 @@ async function runBulk(repo, { filter, limit, dryRun }) {
       }
       const flat = flatten(fm, source);
       // Trust the manifest's own `name` over the directory segment.
-      const finalName = flat.name;
-      const finalPendingDir = join(PENDING_DIR, finalName);
+      let finalName;
+      try { finalName = safeSkillName(flat.name); }
+      catch { report.entries.push({ name, status: "skipped_unsafe_name", path: c.path }); continue; }
+      const finalPendingDir = assertWithin(PENDING_DIR, join(PENDING_DIR, finalName));
       const finalPendingFile = join(finalPendingDir, "SKILL.md");
       if (await exists(join(HERMES_DIR, finalName, "SKILL.md"))) {
         report.entries.push({ name: finalName, status: "skipped_existing_live", path: c.path });
@@ -293,6 +335,10 @@ async function runBulk(repo, { filter, limit, dryRun }) {
 // ---------- Promote ----------
 
 async function runPromote(name, { operator }) {
+  try { name = safeSkillName(name); } catch (e) {
+    console.log(JSON.stringify({ ok: false, mode: "promote", reason: e.message, name }, null, 2));
+    process.exit(1);
+  }
   if (operator !== "chris") {
     const refusal = {
       ok: false,
