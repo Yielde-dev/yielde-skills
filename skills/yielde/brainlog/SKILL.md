@@ -1,9 +1,9 @@
 ---
-name: brain-log
+name: brainlog
 description: Log a decision, incident, staff-work entry, SOP update, client update, or note into the canonical Yielde brain (Yielde-dev/brain) via the intake→Guard pipeline. Use when Chris says "log this", "add to brain", or a session resolved an error / made a decision worth recording.
 ---
 
-# /brain-log
+# /brainlog
 
 Writes to the canonical Yielde brain (`Yielde-dev/brain`, published at brain.yielde.dev). **Every write goes through the intake worktree — never touch `main`.** Guard reviews and lands each file. Always Chris-in-the-loop: show the proposed content before pushing.
 
@@ -11,10 +11,10 @@ Full Guard contract: read `C:\Users\chris\yielde-brain-canonical\CLAUDE.md` befo
 
 ## Argument shapes
 
-- `/brain-log` (no args) — infer the entry kind from recent context; confirm with Chris.
-- `/brain-log decision | incident | sop-update | client-update | note` — a proposal into canonical content.
-- `/brain-log staff-work` — a short cofounder log entry (brain-log/ lane).
-- `/brain-log delegation <claim|decline|reassign|done> <item-id>` — delegation action.
+- `/brainlog` (no args) — infer the entry kind from recent context; confirm with Chris.
+- `/brainlog decision | incident | sop-update | client-update | note` — a proposal into canonical content.
+- `/brainlog staff-work` — a short cofounder log entry (brain-log/ lane).
+- `/brainlog delegation <claim|decline|reassign|done> <item-id>` — delegation action.
 
 ## Flow
 
